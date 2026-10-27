@@ -9,10 +9,30 @@
 </p>
 
 <p align="center">
-  <a href="https://apps.apple.com/us/app/hoply/id6770157807"><strong>App Store에서 Hoply 받기</strong></a>
+  <a href="https://apps.apple.com/us/app/hoply/id6770157807"><strong>원본 Hoply 받기 (App Store)</strong></a>
 </p>
 
 Hoply는 한컴오피스 문서 형식인 `.hwp`와 `.hwpx` 파일을 iOS 기기에서 빠르게 열어볼 수 있는 문서 뷰어입니다. 파일 앱이나 다른 앱의 공유 메뉴로 문서를 열고, 필요한 경우 원본이나 PDF로 다시 공유하거나 AirPrint로 인쇄할 수 있습니다.
+
+## Dayo 수정판 설치
+
+이 fork의 수정판은 **AltStore Classic**에서 설치할 수 있습니다. iOS / iPadOS 16.0 이상을 지원합니다.
+
+**AltStore 소스: [Dayo's source](https://altsource.ddayo.me/source.json)**
+
+```text
+https://altsource.ddayo.me/source.json
+```
+
+1. iPhone / iPad에 AltStore Classic을 설치합니다. 처음 사용하는 경우 공식 [macOS 설치 안내](https://faq.altstore.io/altstore-classic/how-to-install-altstore-macos) 또는 [Windows 설치 안내](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows)를 따라 AltServer와 AltStore Classic을 준비하세요.
+2. 컴퓨터에서 **AltServer**를 실행하고, 기기와 컴퓨터를 같은 Wi-Fi에 연결하거나 USB로 연결합니다.
+3. 기기에서 AltStore Classic을 열고 **Sources (소스)** 화면의 **+** 버튼을 누릅니다.
+4. 위 소스 주소를 붙여 넣고 **Add Source**를 눌러 **Dayo's source**를 추가합니다.
+5. 소스에 표시된 **Hoply**를 선택하고 **FREE / 설치** 버튼을 눌러 설치합니다.
+6. 설치한 Hoply를 실행하거나, 파일 앱에서 `.hwp` / `.hwpx` 문서를 Hoply로 열면 됩니다.
+
+무료 Apple ID로 설치한 앱은 서명 유효 기간이 7일입니다. 만료 전에 AltServer에 연결한 상태에서
+AltStore Classic의 **My Apps → Refresh All**로 갱신하세요. 자세한 내용은 공식 [앱 갱신 안내](https://faq.altstore.io/altstore-classic/your-altstore)를 참고하세요.
 
 ## 주요 기능
 
