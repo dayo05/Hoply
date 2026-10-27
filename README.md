@@ -51,9 +51,8 @@ Hoply는 읽기 전용 앱입니다. 문서를 편집하거나 원본 파일을 
 
 ## 지원과 문의
 
-- 이 fork의 버그 제보와 기능 제안: [GitHub Issues](https://github.com/dayo05/Hoply/issues)
+- 이 fork의 문의·버그 제보·기능 제안: [self@ddayo.me](mailto:self@ddayo.me)
 - 개인정보 처리방침: [한국어](https://www.chkwon.net/Hoply/privacy-policy.html) / [English](https://www.chkwon.net/Hoply/privacy-policy.en.html)
-- 이 fork의 문의: [self@ddayo.me](mailto:self@ddayo.me)
 
 ## 기반 기술
 
