@@ -1,5 +1,7 @@
 import init, { HwpDocument, version as rhwpVersion } from '@rhwp/core';
 import wasmUrl from '@rhwp/core/rhwp_bg.wasm?url';
+import { scopeSvgIds } from './svg-ids';
+import { fitSvgCellText } from './svg-cell-text';
 import './styles.css';
 
 type NativeEvent =
@@ -219,8 +221,16 @@ class RhwpReadOnlyViewer implements ViewerApi {
 
     try {
       const svg = this.document.renderPageSvg(index);
-      page.replaceChildren();
-      page.insertAdjacentHTML('afterbegin', svg);
+      const template = document.createElement('template');
+      template.innerHTML = svg;
+      const svgElement = template.content.querySelector('svg');
+      if (!svgElement) throw new Error('렌더링 결과에 SVG 페이지가 없습니다.');
+      scopeSvgIds(svgElement, `rhwp-page-${index}-`);
+      page.replaceChildren(template.content);
+      fitSvgCellText(svgElement);
+      if (document.fonts.status === 'loading') {
+        void document.fonts.ready.then(() => fitSvgCellText(svgElement));
+      }
       this.applyPageSizeFromSvg(page);
       this.renderedPages.add(index);
     } catch (error) {

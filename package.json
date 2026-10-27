@@ -7,9 +7,14 @@
     "update:rhwp": "bash scripts/update-rhwp.sh",
     "ios:typecheck": "bash scripts/typecheck-ios.sh",
     "ios:build": "xcodebuild -project ios/Hoply.xcodeproj -scheme Hoply -sdk iphonesimulator -configuration Debug build CODE_SIGNING_ALLOWED=NO",
-    "release:bump": "bash scripts/bump-version.sh"
+    "ios:ipa": "bash scripts/build-altstore.sh",
+    "release:bump": "bash scripts/bump-version.sh",
+    "test:viewer": "node --experimental-strip-types --test web-viewer/tests/*.test.mjs"
   },
   "workspaces": [
     "web-viewer"
-  ]
+  ],
+  "devDependencies": {
+    "playwright": "1.64.1"
+  }
 }

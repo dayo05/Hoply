@@ -13,6 +13,31 @@ npm run ios:build
 
 실기기 실행이나 App Store 서명 준비는 `ios/Hoply.xcodeproj`를 Xcode에서 열어 진행합니다.
 
+SVG 페이지의 ID 충돌 회귀 검사는 실제 Chromium에서 실행합니다. Node.js 22.6 이상이 필요합니다.
+
+```bash
+npx playwright install chromium
+npm run test:viewer
+```
+
+이미 설치한 Chrome을 쓰려면 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`에 실행 파일의 절대 경로를 지정합니다.
+각 페이지의 `clipPath` 등 SVG ID와 내부 참조는 같은 DOM에 넣기 전에 쪽별로 구분해야 합니다.
+`@rhwp/core`가 반환하는 ID는 서로 다른 쪽에서 반복될 수 있습니다.
+
+rhwp 0.8.7은 중첩 표를 배치한 뒤 셀 clip을 줄이는 경로가 있어, 이미 배치한 글줄의
+마지막 글자가 우측 경계에 걸릴 수 있습니다. `svg-cell-text.ts`는 실제 브라우저의
+글리프 경계와 모든 조상 clip의 교집합을 비교하고, 문자 시작점이 전부 셀 안에 있는
+가로 글줄의 끝부분만 넘는 경우 그 글줄에 필요한 수평 배율을 적용합니다.
+문자 순서·기준선·줄바꿈·표 테두리는 유지합니다. 셀 밖에서 시작하는 문자나 복잡한
+clip/회전 텍스트는 그대로 두며, 내장 글꼴이 로딩 중이면 완료 후 측정합니다.
+
+WebKit에서도 같은 회귀 검사를 실행할 수 있습니다.
+
+```bash
+npx playwright install webkit
+PLAYWRIGHT_BROWSER=webkit node --experimental-strip-types --test web-viewer/tests/svg-cell-text.test.mjs
+```
+
 ## 아이콘 재생성
 
 앱 아이콘과 HWP / HWPX 문서 아이콘은 Pillow로 코드에서 생성합니다.
@@ -45,6 +70,28 @@ npm run release:bump 0.2.0 7        # 빌드 번호 명시
 ```
 
 사용자에게 보이는 변경 사항은 `CHANGELOG.md`에 해당 버전 항목으로 기록합니다.
+
+## AltStore Classic 배포
+
+```bash
+npm run ios:ipa -- /absolute/path/Hoply.ipa
+```
+
+실기기용 arm64 Release 빌드를 `Payload/Hoply.app`으로 묶습니다. 앱과 Quick Look 확장은
+서명하지 않으며, 설치할 때 AltStore Classic이 사용자 계정으로 서명합니다.
+IPA의 두 `Info.plist`에 있는 버전·빌드 번호와 소스 JSON의 버전·빌드 번호가 같아야 합니다.
+소스의 `size`는 압축된 IPA 파일의 실제 바이트 수를 사용합니다.
+
+로컬 CoreSimulator 서비스와 Xcode 버전이 달라 `actool`이나 `ibtool`이 실패하면 다음
+선택지를 쓸 수 있습니다. 앱 코드는 같은 iPhoneOS SDK로 빌드하고, PNG 아이콘은 직접
+번들에 복사하며 빈 시작 화면은 `UILaunchScreen` 사전으로 지정합니다.
+
+```bash
+npm run ios:ipa -- --portable-resources /absolute/path/Hoply.ipa
+```
+
+실제 기기 설치와 문서 열기는 별도로 확인해야 합니다. 이 IPA는 AltStore PAL용 공증
+패키지가 아닙니다. 기본 빌드 결과는 `.build/altstore/`에 저장됩니다.
 
 ## App Store 배포
 
