@@ -13,6 +13,17 @@ npm run ios:build
 
 실기기 실행이나 App Store 서명 준비는 `ios/Hoply.xcodeproj`를 Xcode에서 열어 진행합니다.
 
+SVG 페이지의 ID 충돌 회귀 검사는 실제 Chromium에서 실행합니다. Node.js 22.6 이상이 필요합니다.
+
+```bash
+npx playwright install chromium
+npm run test:viewer
+```
+
+이미 설치한 Chrome을 쓰려면 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`에 실행 파일의 절대 경로를 지정합니다.
+각 페이지의 `clipPath` 등 SVG ID와 내부 참조는 같은 DOM에 넣기 전에 쪽별로 구분해야 합니다.
+`@rhwp/core`가 반환하는 ID는 서로 다른 쪽에서 반복될 수 있습니다.
+
 ## 아이콘 재생성
 
 앱 아이콘과 HWP / HWPX 문서 아이콘은 Pillow로 코드에서 생성합니다.

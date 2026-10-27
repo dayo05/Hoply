@@ -10,6 +10,11 @@ Connect across all marketing versions.
 
 ## [Unreleased]
 
+### Fixed
+
+- Updated the bundled `@rhwp/core` from 0.7.13 to 0.8.7 to correct overlapping inline tables and page breaks in complex HWP forms.
+- Scoped SVG IDs and fragment references per page so inline pages cannot clip content using another page's definitions.
+
 ## [0.1.2] - 2026-05-31
 
 ### Added
