@@ -71,6 +71,28 @@ npm run release:bump 0.2.0 7        # 빌드 번호 명시
 
 사용자에게 보이는 변경 사항은 `CHANGELOG.md`에 해당 버전 항목으로 기록합니다.
 
+## AltStore Classic 배포
+
+```bash
+npm run ios:ipa -- /absolute/path/Hoply.ipa
+```
+
+실기기용 arm64 Release 빌드를 `Payload/Hoply.app`으로 묶습니다. 앱과 Quick Look 확장은
+서명하지 않으며, 설치할 때 AltStore Classic이 사용자 계정으로 서명합니다.
+IPA의 두 `Info.plist`에 있는 버전·빌드 번호와 소스 JSON의 버전·빌드 번호가 같아야 합니다.
+소스의 `size`는 압축된 IPA 파일의 실제 바이트 수를 사용합니다.
+
+로컬 CoreSimulator 서비스와 Xcode 버전이 달라 `actool`이나 `ibtool`이 실패하면 다음
+선택지를 쓸 수 있습니다. 앱 코드는 같은 iPhoneOS SDK로 빌드하고, PNG 아이콘은 직접
+번들에 복사하며 빈 시작 화면은 `UILaunchScreen` 사전으로 지정합니다.
+
+```bash
+npm run ios:ipa -- --portable-resources /absolute/path/Hoply.ipa
+```
+
+실제 기기 설치와 문서 열기는 별도로 확인해야 합니다. 이 IPA는 AltStore PAL용 공증
+패키지가 아닙니다. 기본 빌드 결과는 `.build/altstore/`에 저장됩니다.
+
 ## App Store 배포
 
 릴리스별 절차입니다. 자세한 변경 내역은 `CHANGELOG.md`를 참고합니다.

@@ -14,6 +14,13 @@
 
 Hoply는 한컴오피스 문서 형식인 `.hwp`와 `.hwpx` 파일을 iOS 기기에서 빠르게 열어볼 수 있는 문서 뷰어입니다. 파일 앱이나 다른 앱의 공유 메뉴로 문서를 열고, 필요한 경우 원본이나 PDF로 다시 공유하거나 AirPrint로 인쇄할 수 있습니다.
 
+## Dayo 수정판 설치
+
+이 fork의 수정판은 AltStore Classic에서 설치할 수 있습니다.
+소스에 `https://altsource.ddayo.me/source.json`을 추가하세요.
+[소스 JSON](https://altsource.ddayo.me/source.json)에는 설치할 IPA의 버전과 다운로드 주소가 들어 있습니다.
+AltStore PAL용 공증 패키지는 제공하지 않습니다.
+
 ## 주요 기능
 
 - `.hwp` / `.hwpx` 문서 열람
