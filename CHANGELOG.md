@@ -14,6 +14,7 @@ Connect across all marketing versions.
 
 - Updated the bundled `@rhwp/core` from 0.7.13 to 0.8.7 to correct overlapping inline tables and page breaks in complex HWP forms.
 - Scoped SVG IDs and fragment references per page so inline pages cannot clip content using another page's definitions.
+- Fitted terminal glyph overhangs to the final SVG cell viewport, correcting right-edge text clipping in nested HWP forms while retaining stored line breaks.
 
 ## [0.1.2] - 2026-05-31
 

@@ -24,6 +24,20 @@ npm run test:viewer
 각 페이지의 `clipPath` 등 SVG ID와 내부 참조는 같은 DOM에 넣기 전에 쪽별로 구분해야 합니다.
 `@rhwp/core`가 반환하는 ID는 서로 다른 쪽에서 반복될 수 있습니다.
 
+rhwp 0.8.7은 중첩 표를 배치한 뒤 셀 clip을 줄이는 경로가 있어, 이미 배치한 글줄의
+마지막 글자가 우측 경계에 걸릴 수 있습니다. `svg-cell-text.ts`는 실제 브라우저의
+글리프 경계와 모든 조상 clip의 교집합을 비교하고, 문자 시작점이 전부 셀 안에 있는
+가로 글줄의 끝부분만 넘는 경우 그 글줄에 필요한 수평 배율을 적용합니다.
+문자 순서·기준선·줄바꿈·표 테두리는 유지합니다. 셀 밖에서 시작하는 문자나 복잡한
+clip/회전 텍스트는 그대로 두며, 내장 글꼴이 로딩 중이면 완료 후 측정합니다.
+
+WebKit에서도 같은 회귀 검사를 실행할 수 있습니다.
+
+```bash
+npx playwright install webkit
+PLAYWRIGHT_BROWSER=webkit node --experimental-strip-types --test web-viewer/tests/svg-cell-text.test.mjs
+```
+
 ## 아이콘 재생성
 
 앱 아이콘과 HWP / HWPX 문서 아이콘은 Pillow로 코드에서 생성합니다.
