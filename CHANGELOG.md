@@ -10,6 +10,15 @@ Connect across all marketing versions.
 
 ## [Unreleased]
 
+### Added
+
+- Simple Edit with fixed text areas, Pencil/finger handwriting, erasing and undo/redo.
+- Separate local drafts and native HWP 5 object export that preserves source records and verifies the original page paint after reload.
+
+### Fixed
+
+- Export and print PDF as individual pages at the original paper dimensions, including added input and signatures.
+
 ## [0.1.3] - 2026-10-27
 
 ### Added
