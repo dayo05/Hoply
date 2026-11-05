@@ -17,6 +17,7 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
     private var originalPayload: DocumentPayload?
     private var editsURL: URL?
     private var isSimpleEditing = false
+    private var isMakingOutput = false
     private var editButton: UIBarButtonItem!
 
     init(documentURL: URL) {
@@ -61,7 +62,7 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
             UIAction(title: "원본 공유 (입력 제외)", image: UIImage(systemName: "doc")) { [weak self] _ in
                 self?.shareOriginal()
             },
-            UIAction(title: "작성한 HWP 공유", image: UIImage(systemName: "square.and.pencil")) { [weak self] _ in
+            UIAction(title: "작성한 HWP 공유", subtitle: "원본은 고정 배경 · 새 입력만 편집 가능", image: UIImage(systemName: "square.and.pencil")) { [weak self] _ in
                 Task { await self?.shareEditedHWP() }
             },
             UIAction(title: "PDF 공유", image: UIImage(systemName: "doc.richtext")) { [weak self] _ in
@@ -306,6 +307,7 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
     }
 
     @objc private func toggleSimpleEdit() {
+        guard !isMakingOutput else { return }
         Task { @MainActor in
             do {
                 let next = !isSimpleEditing
@@ -324,6 +326,7 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
 
     @MainActor
     private func closeDocument() async {
+        guard !isMakingOutput else { return }
         do {
             if pageCount > 0, editButton.isEnabled {
                 guard try await evaluateJavaScript("window.RHWPViewer.isEditBusy()") as? Bool == false else {
@@ -338,11 +341,16 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
 
     @MainActor
     private func shareEditedHWP() async {
-        guard editButton.isEnabled else { return }
+        guard editButton.isEnabled, !isMakingOutput else { return }
+        isMakingOutput = true
+        let wasModal = isModalInPresentation
+        isModalInPresentation = true
+        webView.isUserInteractionEnabled = false
+        defer { isMakingOutput = false; isModalInPresentation = wasModal; webView.isUserInteractionEnabled = true }
         do {
             _ = try await evaluateJavaScript("window.RHWPViewer.setSaveStatus('서식을 확인하고 HWP를 만드는 중…')")
-            let script = "(() => { try { return {ok:true, data:window.RHWPViewer.exportHwp()}; } catch(e) { return {ok:false, error:String(e.message || e)}; } })()"
-            guard let result = try await evaluateJavaScript(script) as? [String: Any] else { throw CocoaError(.fileWriteUnknown) }
+            let script = "try { return {ok:true, data:await window.RHWPViewer.exportHwp()}; } catch(e) { return {ok:false, error:String(e.message || e)}; }"
+            guard let result = try await webView.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page) as? [String: Any] else { throw CocoaError(.fileWriteUnknown) }
             if result["ok"] as? Bool != true {
                 throw NSError(domain: "Hoply.SimpleEdit", code: 1, userInfo: [NSLocalizedDescriptionKey: result["error"] as? String ?? "작성본 HWP를 만들 수 없습니다."])
             }
@@ -361,6 +369,7 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
 
     @MainActor
     private func sharePDF() async {
+        guard !isMakingOutput else { return }
         do {
             let pdfURL = try await makeTemporaryPDF()
             presentActivity(items: [pdfURL], source: navigationItem.rightBarButtonItems?.first) {
@@ -373,6 +382,7 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
 
     @MainActor
     private func printDocument() async {
+        guard !isMakingOutput else { return }
         do {
             let pdfURL = try await makeTemporaryPDF()
             let printController = UIPrintInteractionController.shared
@@ -391,6 +401,11 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
 
     @MainActor
     private func makeTemporaryPDF() async throws -> URL {
+        guard !isMakingOutput else { throw CocoaError(.userCancelled) }
+        isMakingOutput = true
+        let wasModal = isModalInPresentation
+        isModalInPresentation = true
+        defer { isMakingOutput = false; isModalInPresentation = wasModal }
         let wasInteractive = webView.isUserInteractionEnabled
         webView.isUserInteractionEnabled = false
         defer { webView.isUserInteractionEnabled = wasInteractive }

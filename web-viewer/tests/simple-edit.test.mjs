@@ -7,7 +7,7 @@ import { createServer } from 'vite';
 import { chromium, webkit } from 'playwright';
 import { layoutText, validateEdits } from '../src/simple-edit-model.ts';
 import * as CFB from 'cfb';
-import { normalizeCfbAllocation } from '../src/hwp-record-overlay.ts';
+import { normalizeCfbAllocation } from '../src/hwp-fixed-container.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 let server, browser, origin;
@@ -97,14 +97,13 @@ test('read-only default, fixed input, overflow, pen, erase and history leave ori
   } finally { await page.close(); }
 });
 
-test('saved HWP contains editable text and signature, preserves source paint on every page and does not mutate source', async () => {
+test('saved HWP freezes each form page, preserves paper sizes and retains editable input', async () => {
   const file = process.env.HOPLY_HWP_TEST_FILE || resolve(root, 'docs/review-assets/sample.hwp');
   const page = await open(file);
   try {
     const result = await page.evaluate(async () => {
       const { default: init, HwpDocument } = await import('/node_modules/.vite/deps/@rhwp_core.js');
       await init({ module_or_path: '/rhwp-test.wasm' });
-      const { pagePaint, assertOriginalPaint } = await import('/src/hwp-simple-export.ts');
       const bytes = new Uint8Array(await (await fetch('./document/current')).arrayBuffer());
       const original = new HwpDocument(bytes);
       const items = [];
@@ -114,12 +113,16 @@ test('saved HWP contains editable text and signature, preserves source paint on 
       }
       window.RHWPViewer.loadEdits({ schema: 1, items });
       const before = Array.from(document.querySelectorAll('.page > svg:not(.edit-layer)'), e => e.outerHTML);
-      const saved = window.RHWPViewer.exportHwp();
+      const saved = await window.RHWPViewer.exportHwp();
       const reloaded = new HwpDocument(Uint8Array.from(atob(saved), s => s.charCodeAt(0)));
       let addedText = 0;
       for (let i = 0; i < original.pageCount(); i++) {
         const svg = reloaded.renderPageSvg(i);
-        assertOriginalPaint(pagePaint(original.renderPageSvg(i)), pagePaint(svg));
+        const info = JSON.parse(reloaded.getPageInfo(i)), sourceInfo = JSON.parse(original.getPageInfo(i));
+        if (info.width !== sourceInfo.width || info.height !== sourceInfo.height) throw new Error('paper changed');
+        const controls = JSON.parse(reloaded.getPageControlLayout(i)).controls;
+        const background = controls.find(c => c.type === 'image' && JSON.parse(reloaded.getPictureProperties(c.secIdx, c.paraIdx, c.controlIdx)).description === `HoplyBackground:${i}:page`);
+        if (!background || background.x !== 0 || background.y !== 0) throw new Error('background moved');
         const tree = new DOMParser().parseFromString(svg, 'image/svg+xml');
         addedText += [...tree.querySelectorAll('g[clip-path*="textbox-clip-"]')].some(g => g.textContent.replace(/\s/g, '').includes('Dayo테스트')) ? 1 : 0;
       }
@@ -133,14 +136,70 @@ test('saved HWP contains editable text and signature, preserves source paint on 
   } finally { await page.close(); }
 });
 
-test('render comparison rejects moved original text, border, clip and paint order', async () => {
+test('page freezing preserves colored marks and white paper pixels', async () => {
   const page = await open();
   try {
     const checks = await page.evaluate(async () => {
-      const { pagePaint, assertOriginalPaint } = await import('/src/hwp-simple-export.ts');
-      const source = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><clipPath id="a"><rect width="90" height="90"/></clipPath></defs><g clip-path="url(#a)"><text x="10" y="20">원본</text><line x1="0" y1="30" x2="90" y2="30" stroke="black"/></g></svg>';
-      return [source.replace('x="10"', 'x="11"'), source.replace('x2="90"', 'x2="91"'), source.replace('width="90"', 'width="89"')].map(changed => { try { assertOriginalPaint(pagePaint(source), pagePaint(changed)); return false; } catch { return true; } });
+      const { freezePage } = await import('/src/hwp-simple-export.ts');
+      const source = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80"><rect width="120" height="80" fill="white"/><rect x="10" y="20" width="40" height="20" fill="red"/><path d="M10 50H90" stroke="black"/></svg>';
+      const result = await freezePage(source);
+      const image = new Image(); image.src = URL.createObjectURL(new Blob([result.png], { type: 'image/png' })); await image.decode();
+      const canvas = document.createElement('canvas'); canvas.width = result.pixelsWide; canvas.height = result.pixelsHigh;
+      const context = canvas.getContext('2d'); context.drawImage(image, 0, 0);
+      const red = context.getImageData(60, 90, 1, 1).data, white = context.getImageData(6, 6, 1, 1).data;
+      URL.revokeObjectURL(image.src);
+      return [result.width === 120 && result.height === 80, red[0] === 255 && red[1] === 0 && red[2] === 0, white[0] === 255 && white[1] === 255];
     });
     assert.deepEqual(checks, [true, true, true]);
+  } finally { await page.close(); }
+});
+
+test('mixed paper sizes keep separate backgrounds and native input on its own page', async () => {
+  const page = await open();
+  try {
+    const result = await page.evaluate(async () => {
+      const { exportSimpleHwp } = await import('/src/hwp-simple-export.ts');
+      const { default: init, HwpDocument } = await import('/node_modules/.vite/deps/@rhwp_core.js');
+      await init({ module_or_path: '/rhwp-test.wasm' });
+      const sizes = [[400, 600], [600, 400], [500, 700]];
+      const sources = sizes.map(([w, h], i) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}"><rect width="${w}" height="${h}" fill="white"/><rect x="10" y="20" width="40" height="20" fill="${['red', 'green', 'blue'][i]}"/></svg>`);
+      const items = [{ id: 'middle', kind: 'text', page: 1, rect: { x: 100, y: 100, width: 160, height: 50 }, text: 'Editable', fontSize: 13, color: '#17202a' },
+        { id: 'signature', kind: 'ink', page: 2, rect: { x: 100, y: 100, width: 64, height: 24 }, width: 2, color: '#17202a', points: [{ x: 102, y: 102, pressure: .5 }, { x: 140, y: 120, pressure: .5 }] }];
+      // This export path only consumes the immutable source's page count.
+      const bytes = await exportSimpleHwp({ pageCount: () => 3 }, items, sources);
+      const doc = new HwpDocument(bytes);
+      try {
+        const pages = sizes.map((size, i) => {
+          const info = JSON.parse(doc.getPageInfo(i));
+          const controls = JSON.parse(doc.getPageControlLayout(i)).controls;
+          const descriptions = controls.map(c => JSON.parse(c.type === 'image' ? doc.getPictureProperties(c.secIdx, c.paraIdx, c.controlIdx) : doc.getShapeProperties(c.secIdx, c.paraIdx, c.controlIdx)).description);
+          const svg = new DOMParser().parseFromString(doc.renderPageSvg(i), 'image/svg+xml');
+          const image = svg.querySelector('image');
+          const text = svg.querySelector('g[clip-path*="textbox-clip-"] text');
+          const textAboveBackground = !text || Boolean(image.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING);
+          return { size: [info.width, info.height], descriptions: descriptions.sort(), text: [...svg.querySelectorAll('text')].map(t => t.textContent).join(''), textAboveBackground };
+        });
+        const field = JSON.parse(doc.getPageControlLayout(1)).controls.find(c => c.type === 'shape');
+        const mutation = JSON.parse(doc.insertTextInCell(field.secIdx, field.paraIdx, field.controlIdx, 0, 0, 0, 'Changed '));
+        if (mutation.error || mutation.ok === false) throw new Error(JSON.stringify(mutation));
+        const edited = new HwpDocument(doc.exportHwp());
+        let editable;
+        try {
+          const tree = new DOMParser().parseFromString(edited.renderPageSvg(1), 'image/svg+xml');
+          editable = [...tree.querySelectorAll('text')].map(t => t.textContent).join('');
+        } finally { edited.free(); }
+        return { pages, count: doc.pageCount(), editable };
+      } finally { doc.free(); }
+    });
+    assert.equal(result.count, 3);
+    assert.deepEqual(result.pages.map(p => p.size), [[400, 600], [600, 400], [500, 700]]);
+    assert.deepEqual(result.pages.map(p => p.descriptions), [
+      ['HoplyBackground:0:page'], ['HoplyBackground:1:page', 'HoplyInput:middle:0:text'], ['HoplyBackground:2:page', 'HoplyInput:signature:ink']
+    ]);
+    assert.equal(result.pages[0].text.includes('Editable'), false);
+    assert.equal(result.pages[1].text.includes('Editable'), true);
+    assert.equal(result.pages[2].text.includes('Editable'), false);
+    assert.equal(result.pages.every(p => p.textAboveBackground), true);
+    assert.match(result.editable.replace(/\s/g, ''), /ChangedEditable/);
   } finally { await page.close(); }
 });

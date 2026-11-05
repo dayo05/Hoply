@@ -13,7 +13,7 @@ Connect across all marketing versions.
 ### Added
 
 - Simple Edit with fixed text areas, Pencil/finger handwriting, erasing and undo/redo.
-- Separate local drafts and native HWP 5 object export that preserves source records and verifies the original page paint after reload.
+- Separate local drafts and HWP 5 export with fixed page backgrounds, editable native textboxes and separate signature images. Reload verification checks paper sizes, background positions and exact background image bytes.
 
 ### Fixed
 

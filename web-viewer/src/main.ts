@@ -50,7 +50,7 @@ interface ViewerApi {
   setEditing: (enabled: boolean) => boolean;
   isEditBusy: () => boolean;
   setSaveStatus: (message: string) => void;
-  exportHwp: () => string;
+  exportHwp: () => Promise<string>;
 }
 
 const pagesElement = document.querySelector<HTMLElement>('#pages');
@@ -110,9 +110,12 @@ class RhwpReadOnlyViewer implements ViewerApi {
   setEditing(enabled: boolean): boolean { return this.editor.setEnabled(enabled); }
   isEditBusy(): boolean { return this.editor.isBusy(); }
   setSaveStatus(message: string): void { this.editor.setStatus(message); }
-  exportHwp(): string {
+  async exportHwp(): Promise<string> {
     if (!this.originalBytes || !this.document || this.editor.isBusy()) throw new Error('입력 중인 내용을 먼저 적용하거나 취소해 주세요.');
-    const bytes = exportSimpleHwp(this.originalBytes, this.editor.snapshot().items, this.document);
+    this.renderAllPages();
+    await document.fonts.ready;
+    const sourcePages = [...pagesEl.querySelectorAll<SVGSVGElement>('.page > svg:not(.edit-layer)')].map(svg => svg.outerHTML);
+    const bytes = await exportSimpleHwp(this.document, this.editor.snapshot().items, sourcePages);
     let binary = '';
     for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
     return btoa(binary);
