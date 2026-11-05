@@ -1,6 +1,7 @@
 import UIKit
 import StoreKit
 import WebKit
+import CryptoKit
 
 final class DocumentViewController: UIViewController, WKScriptMessageHandler {
     private let documentURL: URL
@@ -13,6 +14,11 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
     private var didRecordSuccessfulOpen = false
     private let pageLabel = UILabel()
     private let titleLabel = UILabel()
+    private var originalPayload: DocumentPayload?
+    private var editsURL: URL?
+    private var isSimpleEditing = false
+    private var isMakingOutput = false
+    private var editButton: UIBarButtonItem!
 
     init(documentURL: URL) {
         self.documentURL = documentURL
@@ -48,13 +54,16 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
         navigationItem.leftBarButtonItem = UIBarButtonItem(
             systemItem: .done,
             primaryAction: UIAction { [weak self] _ in
-                self?.dismiss(animated: true)
+                Task { await self?.closeDocument() }
             }
         )
 
         let shareMenu = UIMenu(children: [
-            UIAction(title: "원본 공유", image: UIImage(systemName: "doc")) { [weak self] _ in
+            UIAction(title: "원본 공유 (입력 제외)", image: UIImage(systemName: "doc")) { [weak self] _ in
                 self?.shareOriginal()
+            },
+            UIAction(title: "작성한 HWP 공유", subtitle: "원본은 고정 배경 · 새 입력만 편집 가능", image: UIImage(systemName: "square.and.pencil")) { [weak self] _ in
+                Task { await self?.shareEditedHWP() }
             },
             UIAction(title: "PDF 공유", image: UIImage(systemName: "doc.richtext")) { [weak self] _ in
                 Task { await self?.sharePDF() }
@@ -71,7 +80,10 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
                 Task { await self?.printDocument() }
             }
         )
-        navigationItem.rightBarButtonItems = [shareButton, printButton]
+        editButton = UIBarButtonItem(title: "Edit", style: .plain, target: self, action: #selector(toggleSimpleEdit))
+        editButton.accessibilityLabel = "Simple Edit 시작"
+        editButton.isEnabled = false
+        navigationItem.rightBarButtonItems = [shareButton, printButton, editButton]
 
         pageLabel.font = .preferredFont(forTextStyle: .footnote)
         pageLabel.textColor = .secondaryLabel
@@ -136,7 +148,7 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
     private func configureWebView() {
         let configuration = WKWebViewConfiguration()
         let userContentController = WKUserContentController()
-        userContentController.add(self, name: "viewer")
+        userContentController.add(WeakViewerMessageHandler(target: self), name: "viewer")
         configuration.userContentController = userContentController
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
 
@@ -159,6 +171,7 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
         webView.allowsBackForwardNavigationGestures = false
         webView.scrollView.backgroundColor = .systemGroupedBackground
         webView.scrollView.contentInsetAdjustmentBehavior = .automatic
+        webView.scrollView.panGestureRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
         view.addSubview(webView)
 
         NSLayoutConstraint.activate([
@@ -176,12 +189,25 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
     }
 
     private func readDocumentPayload() throws -> DocumentPayload {
-        DocumentPayload(data: try Data(contentsOf: documentURL), fileName: documentURL.lastPathComponent)
+        if let originalPayload { return originalPayload }
+        let payload = DocumentPayload(data: try Data(contentsOf: documentURL), fileName: documentURL.lastPathComponent)
+        // Tie edits to the exact original and its local filename. Imported
+        // copies have unique filenames and must not share filled-in values.
+        // Never write to documentURL.
+        var identity = SHA256()
+        identity.update(data: payload.data)
+        identity.update(data: Data(documentURL.lastPathComponent.utf8))
+        let hash = identity.finalize().map { String(format: "%02x", $0) }.joined()
+        editsURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("SimpleEdit", isDirectory: true).appendingPathComponent("\(hash).json")
+        originalPayload = payload
+        return payload
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard
             message.name == "viewer",
+            message.frameInfo.isMainFrame,
             let body = message.body as? [String: Any],
             let type = body["type"] as? String
         else { return }
@@ -194,6 +220,15 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
             }
             updatePageLabel()
             recordSuccessfulOpenIfNeeded()
+            Task { await loadSimpleEdits() }
+        case "editsChanged":
+            do {
+                guard let state = body["state"] as? [String: Any] else { return }
+                try persistSimpleEdits(state)
+            } catch {
+                webView.evaluateJavaScript("window.RHWPViewer.setSaveStatus('저장 실패 · 앱을 닫지 말고 다시 시도해 주세요.')")
+                showError(title: "입력을 저장하지 못했습니다", message: error.localizedDescription)
+            }
         case "pageChanged":
             currentPageIndex = body["pageIndex"] as? Int ?? currentPageIndex
             updatePageLabel()
@@ -247,7 +282,94 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
     }
 
     @MainActor
+    private func loadSimpleEdits() async {
+        do {
+            guard let editsURL else { return }
+            let data = FileManager.default.fileExists(atPath: editsURL.path)
+                ? try Data(contentsOf: editsURL) : Data("{\"schema\":1,\"items\":[]}".utf8)
+            guard data.count <= 8_000_000 else { throw CocoaError(.fileReadCorruptFile) }
+            let parsed = try JSONSerialization.jsonObject(with: data)
+            let canonical = try JSONSerialization.data(withJSONObject: parsed)
+            guard let json = String(data: canonical, encoding: .utf8) else { throw CocoaError(.fileReadCorruptFile) }
+            _ = try await evaluateJavaScript("window.RHWPViewer.loadEdits(\(json))")
+            editButton.isEnabled = true
+        } catch {
+            showError(title: "저장한 입력을 불러오지 못했습니다", message: error.localizedDescription)
+        }
+    }
+
+    private func persistSimpleEdits(_ state: [String: Any]) throws {
+        guard let editsURL, state["schema"] as? Int == 1, state["items"] is [Any] else { throw CocoaError(.fileWriteUnknown) }
+        let data = try JSONSerialization.data(withJSONObject: state)
+        guard data.count <= 8_000_000 else { throw CocoaError(.fileWriteOutOfSpace) }
+        try FileManager.default.createDirectory(at: editsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: editsURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
+    @objc private func toggleSimpleEdit() {
+        guard !isMakingOutput else { return }
+        Task { @MainActor in
+            do {
+                let next = !isSimpleEditing
+                let result = try await evaluateJavaScript("window.RHWPViewer.setEditing(\(next))")
+                guard result as? Bool == true else {
+                    showError(title: "입력이 진행 중입니다", message: "입력창에서 적용 또는 취소를 누른 뒤 완료해 주세요.")
+                    return
+                }
+                isSimpleEditing = next
+                isModalInPresentation = next
+                editButton.title = next ? "완료" : "Edit"
+                editButton.accessibilityLabel = next ? "Simple Edit 완료" : "Simple Edit 시작"
+            } catch { showError(title: "편집 모드를 바꿀 수 없습니다", message: error.localizedDescription) }
+        }
+    }
+
+    @MainActor
+    private func closeDocument() async {
+        guard !isMakingOutput else { return }
+        do {
+            if pageCount > 0, editButton.isEnabled {
+                guard try await evaluateJavaScript("window.RHWPViewer.isEditBusy()") as? Bool == false else {
+                    showError(title: "입력이 진행 중입니다", message: "입력창에서 적용 또는 취소를 누른 뒤 닫아 주세요.")
+                    return
+                }
+                if let state = try await evaluateJavaScript("window.RHWPViewer.getEdits()") as? [String: Any] { try persistSimpleEdits(state) }
+            }
+            dismiss(animated: true)
+        } catch { showError(title: "입력을 저장하지 못했습니다", message: error.localizedDescription) }
+    }
+
+    @MainActor
+    private func shareEditedHWP() async {
+        guard editButton.isEnabled, !isMakingOutput else { return }
+        isMakingOutput = true
+        let wasModal = isModalInPresentation
+        isModalInPresentation = true
+        webView.isUserInteractionEnabled = false
+        defer { isMakingOutput = false; isModalInPresentation = wasModal; webView.isUserInteractionEnabled = true }
+        do {
+            _ = try await evaluateJavaScript("window.RHWPViewer.setSaveStatus('서식을 확인하고 HWP를 만드는 중…')")
+            let script = "try { return {ok:true, data:await window.RHWPViewer.exportHwp()}; } catch(e) { return {ok:false, error:String(e.message || e)}; }"
+            guard let result = try await webView.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page) as? [String: Any] else { throw CocoaError(.fileWriteUnknown) }
+            if result["ok"] as? Bool != true {
+                throw NSError(domain: "Hoply.SimpleEdit", code: 1, userInfo: [NSLocalizedDescriptionKey: result["error"] as? String ?? "작성본 HWP를 만들 수 없습니다."])
+            }
+            guard let base64 = result["data"] as? String, let data = Data(base64Encoded: base64) else { throw CocoaError(.fileWriteUnknown) }
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let url = directory.appendingPathComponent(documentURL.deletingPathExtension().lastPathComponent + "-작성본.hwp")
+            try data.write(to: url, options: .atomic)
+            _ = try await evaluateJavaScript("window.RHWPViewer.setSaveStatus('원본 서식 검증 완료 · 작성본 HWP 준비됨')")
+            presentActivity(items: [url], source: navigationItem.rightBarButtonItems?.first) { try? FileManager.default.removeItem(at: directory) }
+        } catch {
+            _ = try? await evaluateJavaScript("window.RHWPViewer.setSaveStatus('HWP 저장 실패 · 입력 내용은 앱에 보관되어 있습니다.')")
+            showError(title: "작성본 HWP를 만들지 못했습니다", message: error.localizedDescription)
+        }
+    }
+
+    @MainActor
     private func sharePDF() async {
+        guard !isMakingOutput else { return }
         do {
             let pdfURL = try await makeTemporaryPDF()
             presentActivity(items: [pdfURL], source: navigationItem.rightBarButtonItems?.first) {
@@ -260,16 +382,17 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
 
     @MainActor
     private func printDocument() async {
+        guard !isMakingOutput else { return }
         do {
-            try await prepareViewerForPrint()
+            let pdfURL = try await makeTemporaryPDF()
             let printController = UIPrintInteractionController.shared
             let printInfo = UIPrintInfo(dictionary: nil)
             printInfo.outputType = .general
             printInfo.jobName = documentURL.deletingPathExtension().lastPathComponent
             printController.printInfo = printInfo
-            printController.printFormatter = webView.viewPrintFormatter()
-            printController.present(animated: true) { [weak self] _, _, _ in
-                self?.webView.evaluateJavaScript("window.RHWPViewer.clearPrintMode()")
+            printController.printingItem = pdfURL
+            printController.present(animated: true) { _, _, _ in
+                try? FileManager.default.removeItem(at: pdfURL)
             }
         } catch {
             showError(title: "프린트 준비 실패", message: error.localizedDescription)
@@ -278,25 +401,53 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
 
     @MainActor
     private func makeTemporaryPDF() async throws -> URL {
+        guard !isMakingOutput else { throw CocoaError(.userCancelled) }
+        isMakingOutput = true
+        let wasModal = isModalInPresentation
+        isModalInPresentation = true
+        defer { isMakingOutput = false; isModalInPresentation = wasModal }
+        let wasInteractive = webView.isUserInteractionEnabled
+        webView.isUserInteractionEnabled = false
+        defer { webView.isUserInteractionEnabled = wasInteractive }
         try await prepareViewerForPrint()
         defer {
             webView.evaluateJavaScript("window.RHWPViewer.clearPrintMode()")
         }
 
-        let configuration = WKPDFConfiguration()
-        let contentSize = webView.scrollView.contentSize
-        let boundsSize = webView.bounds.size
-        let pdfSize = CGSize(
-            width: max(contentSize.width, boundsSize.width),
-            height: max(contentSize.height, boundsSize.height)
-        )
-        if pdfSize.width > 0, pdfSize.height > 0 {
-            configuration.rect = CGRect(origin: .zero, size: pdfSize)
+        guard let rects = try await evaluateJavaScript("Array.from(document.querySelectorAll('.page')).map(p => { const r = p.getBoundingClientRect(); return {x:r.x + scrollX, y:r.y + scrollY, width:r.width, height:r.height}; })") as? [[String: Double]], rects.count == pageCount else {
+            throw DocumentViewError.printPreparationFailed
         }
-
-        let data = try await createPDF(configuration: configuration)
+        var pages: [CGPDFPage] = []
+        for rect in rects {
+            guard let x = rect["x"], let y = rect["y"], let width = rect["width"], let height = rect["height"], width > 0, height > 0 else { throw DocumentViewError.printPreparationFailed }
+            let configuration = WKPDFConfiguration()
+            configuration.rect = CGRect(x: x, y: y, width: width, height: height)
+            let data = try await createPDF(configuration: configuration)
+            guard let provider = CGDataProvider(data: data as CFData), let document = CGPDFDocument(provider), let page = document.page(at: 1) else { throw DocumentViewError.printPreparationFailed }
+            pages.append(page)
+        }
+        guard let first = pages.first else { throw DocumentViewError.printPreparationFailed }
+        let firstBox = first.getBoxRect(.mediaBox)
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: firstBox.width * 0.75, height: firstBox.height * 0.75))
+        let data = renderer.pdfData { context in
+            for page in pages {
+                let box = page.getBoxRect(.mediaBox)
+                // SVG dimensions use CSS px (96/in); PDF uses points (72/in).
+                let bounds = CGRect(x: 0, y: 0, width: box.width * 0.75, height: box.height * 0.75)
+                context.beginPage(withBounds: bounds, pageInfo: [:])
+                let cg = context.cgContext
+                cg.saveGState()
+                cg.translateBy(x: 0, y: bounds.height)
+                cg.scaleBy(x: 0.75, y: -0.75)
+                cg.translateBy(x: -box.minX, y: -box.minY)
+                cg.drawPDFPage(page)
+                cg.restoreGState()
+            }
+        }
         let baseName = documentURL.deletingPathExtension().lastPathComponent
-        let outputURL = FileManager.default.temporaryDirectory
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let outputURL = directory
             .appendingPathComponent("\(baseName)-Hoply.pdf")
         try data.write(to: outputURL, options: .atomic)
         return outputURL
@@ -304,6 +455,7 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
 
     @MainActor
     private func prepareViewerForPrint() async throws {
+        guard try await evaluateJavaScript("window.RHWPViewer.isEditBusy()") as? Bool == false else { throw DocumentViewError.printPreparationFailed }
         let result = try await evaluateJavaScript("Boolean(window.RHWPViewer.prepareForPrint())")
         guard result as? Bool == true else {
             throw DocumentViewError.printPreparationFailed
@@ -356,6 +508,14 @@ final class DocumentViewController: UIViewController, WKScriptMessageHandler {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "확인", style: .default))
         present(alert, animated: true)
+    }
+}
+
+private final class WeakViewerMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var target: WKScriptMessageHandler?
+    init(target: WKScriptMessageHandler) { self.target = target }
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        target?.userContentController(userContentController, didReceive: message)
     }
 }
 

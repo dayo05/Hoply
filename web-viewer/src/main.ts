@@ -2,11 +2,15 @@ import init, { HwpDocument, version as rhwpVersion } from '@rhwp/core';
 import wasmUrl from '@rhwp/core/rhwp_bg.wasm?url';
 import { scopeSvgIds } from './svg-ids';
 import { fitSvgCellText } from './svg-cell-text';
+import { SimpleEdit } from './simple-edit';
+import { exportSimpleHwp } from './hwp-simple-export';
+import type { EditState } from './simple-edit-model';
 import './styles.css';
 
 type NativeEvent =
   | { type: 'loaded'; pageCount: number; fileName: string; rhwpVersion: string }
   | { type: 'pageChanged'; pageIndex: number }
+  | { type: 'editsChanged'; state: EditState }
   | { type: 'renderError'; message: string; recoverable: boolean };
 
 type PageInfo = {
@@ -41,6 +45,12 @@ interface ViewerApi {
   renderAllPages: () => boolean;
   prepareForPrint: () => boolean;
   clearPrintMode: () => void;
+  loadEdits: (state: unknown) => void;
+  getEdits: () => EditState;
+  setEditing: (enabled: boolean) => boolean;
+  isEditBusy: () => boolean;
+  setSaveStatus: (message: string) => void;
+  exportHwp: () => Promise<string>;
 }
 
 const pagesElement = document.querySelector<HTMLElement>('#pages');
@@ -87,6 +97,29 @@ class RhwpReadOnlyViewer implements ViewerApi {
   private currentPageIndex = -1;
   private userZoom = 1;
   private fitScale = 1;
+  private originalBytes: Uint8Array | null = null;
+  private editor = new SimpleEdit(() => postNative({ type: 'editsChanged', state: this.getEdits() }));
+
+  loadEdits(state: unknown): void {
+    const saved = state as { renderer?: string; layout?: string };
+    if (saved?.renderer && (saved.renderer !== rhwpVersion() || saved.layout !== this.layoutIdentity())) throw new Error('이 입력은 다른 렌더링 버전에서 저장되었습니다. 위치를 확인하기 전에는 자동으로 적용할 수 없습니다.');
+    this.editor.load(state, this.pageCount);
+  }
+  getEdits(): EditState { return { ...this.editor.snapshot(), renderer: rhwpVersion(), layout: this.layoutIdentity() }; }
+  private layoutIdentity(): string { return JSON.stringify(this.pageInfos.map(p => [p.width, p.height])); }
+  setEditing(enabled: boolean): boolean { return this.editor.setEnabled(enabled); }
+  isEditBusy(): boolean { return this.editor.isBusy(); }
+  setSaveStatus(message: string): void { this.editor.setStatus(message); }
+  async exportHwp(): Promise<string> {
+    if (!this.originalBytes || !this.document || this.editor.isBusy()) throw new Error('입력 중인 내용을 먼저 적용하거나 취소해 주세요.');
+    this.renderAllPages();
+    await document.fonts.ready;
+    const sourcePages = [...pagesEl.querySelectorAll<SVGSVGElement>('.page > svg:not(.edit-layer)')].map(svg => svg.outerHTML);
+    const bytes = await exportSimpleHwp(this.document, this.editor.snapshot().items, sourcePages);
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+    return btoa(binary);
+  }
 
   constructor() {
     window.addEventListener('resize', () => this.updateFitScale());
@@ -106,6 +139,7 @@ class RhwpReadOnlyViewer implements ViewerApi {
 
       const fileName = decodeURIComponent(response.headers.get('X-Document-Name') ?? 'document.hwp');
       const bytes = new Uint8Array(await response.arrayBuffer());
+      this.originalBytes = bytes;
       this.document?.free();
       this.document = new HwpDocument(bytes);
       this.pageCount = this.document.pageCount();
@@ -232,6 +266,7 @@ class RhwpReadOnlyViewer implements ViewerApi {
         void document.fonts.ready.then(() => fitSvgCellText(svgElement));
       }
       this.applyPageSizeFromSvg(page);
+      this.editor.mount(page, svgElement, index);
       this.renderedPages.add(index);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
